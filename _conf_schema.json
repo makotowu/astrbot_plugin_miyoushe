@@ -1,0 +1,38 @@
+{
+    "proxy": {
+        "description": "代理地址",
+        "type": "string",
+        "hint": "HTTP 代理地址。示例: http://127.0.0.1:7890，留空则直连。",
+        "default": ""
+    },
+    "push_interval": {
+        "description": "轮询间隔（秒）",
+        "type": "int",
+        "hint": "每次检查新资讯的间隔秒数，默认300秒（5分钟）",
+        "default": 300
+    },
+    "push_window": {
+        "description": "新资讯窗口（秒）",
+        "type": "int",
+        "hint": "只推送在此时间窗口内发布的新资讯，默认7200秒（2小时）",
+        "default": 7200
+    },
+    "max_push_per_round": {
+        "description": "每轮最大推送条数",
+        "type": "int",
+        "hint": "每轮推送每个游戏+类型的最大条数",
+        "default": 2
+    },
+    "rai": {
+        "description": "图片渲染模式",
+        "type": "bool",
+        "hint": "是否以图片形式渲染资讯推送（复用米游社原版样式）",
+        "default": true
+    },
+    "render_cache_limit": {
+        "description": "渲染缓存上限",
+        "type": "int",
+        "hint": "已渲染图片缓存的最大数量，避免重复渲染",
+        "default": 32
+    }
+}
