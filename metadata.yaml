@@ -1,5 +1,7 @@
 name: astrbot_plugin_miyoushe
+display_name: 米游社资讯推送
 desc: 米游社官方资讯推送插件，定时获取原神/崩铁/绝区零等游戏的公告和资讯并推送
+short_desc: 定时获取原神/崩铁/绝区零等游戏的公告和资讯并推送到群
 help: 输入 #米游社推送 查看帮助
 version: v0.0.1
 author: "makotowu"
