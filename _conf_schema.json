@@ -23,16 +23,22 @@
         "hint": "每轮推送每个游戏+类型的最大条数",
         "default": 2
     },
-    "rai": {
-        "description": "图片渲染模式",
+    "push_summary_len": {
+        "description": "摘要截取字数",
+        "type": "int",
+        "hint": "定时推送富文本卡片中摘要的最大字数，默认100；0 表示不带摘要",
+        "default": 100
+    },
+    "ai_summary_enable": {
+        "description": "启用 AI 总结",
         "type": "bool",
-        "hint": "是否以图片形式渲染资讯推送（复用米游社原版样式）",
+        "hint": "链接解析/公告详情是否使用 AI 总结；关闭后回退为文章自带摘要（#米游社 搜索始终为纯文字列表，不调 AI）",
         "default": true
     },
-    "render_cache_limit": {
-        "description": "渲染缓存上限",
-        "type": "int",
-        "hint": "已渲染图片缓存的最大数量，避免重复渲染",
-        "default": 32
+    "ai_summary_provider_id": {
+        "description": "AI 总结模型",
+        "type": "string",
+        "hint": "指定用于总结的 Provider ID（例如 deepseek/deepseek-flash），请选择支持图片输入的视觉模型；留空使用当前默认模型。注意：当前默认 provider openai/gpt-5.4 的令牌已过期，建议显式指定。",
+        "default": ""
     }
 }

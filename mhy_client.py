@@ -45,11 +45,22 @@ class MhyClient:
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
-            kwargs: Dict[str, Any] = {"timeout": 15}
-            if self._proxy:
-                kwargs["proxies"] = {"all://": self._proxy}
-            self._client = httpx.AsyncClient(**kwargs)
+            self._client = self._create_client()
         return self._client
+
+    def _create_client(self) -> httpx.AsyncClient:
+        """创建 AsyncClient，兼容 httpx 0.28 的 proxy= 参数改名。
+
+        - httpx >= 0.28：只接受 proxy=，proxies= 已被移除（线上 0.28.1）
+        - httpx < 0.28：只接受 proxies=，不认识 proxy=
+        """
+        if not self._proxy:
+            return httpx.AsyncClient(timeout=15)
+        try:
+            return httpx.AsyncClient(timeout=15, proxy=self._proxy)
+        except TypeError:
+            # 老版本 httpx：回退到 proxies= 字典形式
+            return httpx.AsyncClient(timeout=15, proxies={"all://": self._proxy})
 
     async def close(self):
         if self._client and not self._client.is_closed:
