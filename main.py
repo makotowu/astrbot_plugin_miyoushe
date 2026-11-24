@@ -8,11 +8,10 @@ import time
 from typing import Dict, List, Optional, Tuple
 
 from astrbot.api import AstrBotConfig, logger
-from astrbot.api.all import *  # noqa: F403
 from astrbot.api.event import AstrMessageEvent, MessageChain, MessageEventResult
 from astrbot.api.event.filter import (
     PermissionType,
-    command,
+    llm_tool,
     permission_type,
     regex,
 )
@@ -207,9 +206,7 @@ class Main(Star):
                     targets = [
                         session_id
                         for session_id in groups
-                        if not self.dedup.is_sent(
-                            self._dedup_key(session_id, post_id)
-                        )
+                        if not self.dedup.is_sent(self._dedup_key(session_id, post_id))
                     ]
                     if not targets:
                         continue
@@ -266,9 +263,7 @@ class Main(Star):
 
         self.push_data.save()
 
-    async def _send_chain(
-        self, session_id: str, chain: MessageChain
-    ) -> _SendOutcome:
+    async def _send_chain(self, session_id: str, chain: MessageChain) -> _SendOutcome:
         """主动发送一条消息链，返回 (是否成功, 是否永久失效, 最后一次异常)。
 
         并发发送时不能用实例级状态记录错误，结果一律通过返回值传递。
@@ -424,9 +419,7 @@ class Main(Star):
         logger.debug(f"[定时推送] 未找到平台实例，跳过 scene 预热: {platform_id}")
         return parsed
 
-    async def _send_entry(
-        self, session_id: str, entry: dict
-    ) -> _SendOutcome:
+    async def _send_entry(self, session_id: str, entry: dict) -> _SendOutcome:
         """发送一条公告：富文本卡片（文字+封面）失败时降级为纯文字链。"""
         rich_chain = MessageChain(chain=list(entry["chain"].chain))
         ok, permanent, exc = await self._send_chain(
@@ -538,9 +531,7 @@ class Main(Star):
                 )
         return text, MessageChain(chain=parts)
 
-    def _extract_push_summary(
-        self, wrapper: dict, post: dict, summary_len: int
-    ) -> str:
+    def _extract_push_summary(self, wrapper: dict, post: dict, summary_len: int) -> str:
         """按 structured_content → content → meta_content 顺序提取摘要。"""
         if summary_len <= 0:
             return ""
@@ -639,17 +630,14 @@ class Main(Star):
             elif isinstance(first, dict):
                 candidates.append(first.get("url"))
         for url in candidates:
-            if (
-                isinstance(url, str)
-                and url.strip().lower().startswith(("http://", "https://"))
+            if isinstance(url, str) and url.strip().lower().startswith(
+                ("http://", "https://")
             ):
                 return url.strip()
         return ""
 
     @staticmethod
-    def _format_push_text(
-        label: str, summary: str, created_ts: int, link: str
-    ) -> str:
+    def _format_push_text(label: str, summary: str, created_ts: int, link: str) -> str:
         """富文本卡片的文字模板：标题、摘要、发布时间、链接，无连续空行。"""
         blocks: List[str] = [label.strip()]
         body: List[str] = []
@@ -858,9 +846,7 @@ class Main(Star):
             post_id = str(post.get("post_id", ""))
             created = int(post.get("created_at", 0) or 0)
             time_str = (
-                time.strftime("%m-%d %H:%M", time.localtime(created))
-                if created
-                else ""
+                time.strftime("%m-%d %H:%M", time.localtime(created)) if created else ""
             )
             link = (
                 f"https://www.miyoushe.com/{url_key}/article/{post_id}"
@@ -969,8 +955,7 @@ class Main(Star):
                 meta: List[str] = []
                 if created:
                     meta.append(
-                        "🕒 "
-                        + time.strftime("%Y-%m-%d %H:%M", time.localtime(created))
+                        "🕒 " + time.strftime("%Y-%m-%d %H:%M", time.localtime(created))
                     )
                 if link:
                     meta.append(f"🔗 {link}")
@@ -1045,7 +1030,9 @@ class Main(Star):
     #  命令: URL 自动解析
     # ================================================================
 
-    @regex(r"https?://(?:www\.|m\.)?(?:miyoushe|bbs\.mihoyo)\.com/\w+(?:[^#]*?)(?:#/)?article/\d+")
+    @regex(
+        r"https?://(?:www\.|m\.)?(?:miyoushe|bbs\.mihoyo)\.com/\w+(?:[^#]*?)(?:#/)?article/\d+"
+    )
     async def parse_miyoushe_url(self, event: AstrMessageEvent):
         m = _MIYOUSHE_URL_RE.search(event.message_str)
         if not m:
@@ -1065,11 +1052,14 @@ class Main(Star):
     # ================================================================
 
     async def _is_group_admin(self, event: AstrMessageEvent) -> bool:
-        """检查用户是否有管理推送的权限（群管理员 或 Bot 管理员）"""
+        """先认 Bot 管理员，再核对平台提供的群管理身份；缺失身份不放行。"""
+        if event.is_admin():
+            return True
+        if event.is_private_chat():
+            return True  # 私聊只允许管理自己的订阅，不能指定其他会话
+        roles = ("owner", "admin", "group_owner", "group_admin")
         try:
             msg_obj = getattr(event, "message_obj", None)
-            if not msg_obj:
-                return True  # 非 aiocqhttp，放行
             sender = getattr(msg_obj, "sender", None)
             if sender:
                 role = (
@@ -1078,64 +1068,217 @@ class Main(Star):
                     else getattr(sender, "role", "")
                 )
                 if role:
-                    return role in ("owner", "admin", "group_owner", "group_admin")
-                # sender 无 role 字段 → API 调用（Bot 管理员）
-                return True
+                    return role in roles
+            # OneBot 的 MessageMember 通常只有 user_id/nickname，role 在原始事件里。
+            if event.get_platform_name() == "aiocqhttp":
+                raw = getattr(msg_obj, "raw_message", None)
+                raw_sender = raw.get("sender", {}) if isinstance(raw, dict) else {}
+                role = (
+                    raw_sender.get("role", "") if isinstance(raw_sender, dict) else ""
+                )
+                if role:
+                    return role in roles
+                bot = getattr(event, "bot", None)
+                if bot and event.get_group_id():
+                    member = await asyncio.wait_for(
+                        bot.get_group_member_info(
+                            group_id=int(event.get_group_id()),
+                            user_id=int(event.get_sender_id()),
+                            no_cache=True,
+                        ),
+                        timeout=5,
+                    )
+                    return isinstance(member, dict) and member.get("role") in roles
+            # 新版适配器可返回群主/管理员列表。QQ 官方群不提供该身份信息，
+            # 不调用额外网络接口猜测，必须用 AstrBot 管理员身份在本群操作。
+            if not event.get_platform_name().startswith("qq_official"):
+                group = await asyncio.wait_for(event.get_group(), timeout=5)
+                if group:
+                    uid = event.get_sender_id()
+                    return uid == str(group.group_owner or "") or uid in {
+                        str(v) for v in (group.group_admins or [])
+                    }
+        except Exception as e:
+            logger.warning(f"[推送权限] 无法核实群管理身份: {e}")
+        return False
+
+    @staticmethod
+    def _permission_hint(event: AstrMessageEvent) -> str:
+        if event.get_platform_name().startswith("qq_official"):
+            return (
+                "暂无权限。QQ 官方群消息不提供群管理员身份，"
+                "请在 AstrBot 管理面板将当前发送者 ID（OpenID）设为管理员后，"
+                "在本群重试；无需私信。可在本群发送 /sid 查看 UID。"
+            )
+        return "暂无权限，只有群管理员或 AstrBot 管理员才能操作；可直接在本群设置，无需私信。"
+
+    @staticmethod
+    def _push_target_label(event: AstrMessageEvent) -> str:
+        return (
+            "当前私聊（不会推送到群，请到目标群开启）"
+            if event.is_private_chat()
+            else "当前群聊"
+        )
+
+    def _save_subscription(
+        self, section: dict, keys: List[str], umo: str, enable: bool
+    ) -> bool:
+        """落盘成功才确认；保存失败恢复内存，避免出现假成功。"""
+        snapshot = {key: list(values) for key, values in section.items()}
+        for key in keys:
+            values = section.setdefault(key, [])
+            if enable and umo not in values:
+                values.append(umo)
+            elif not enable and umo in values:
+                values.remove(umo)
+        try:
+            self.push_data.save()
         except Exception:
-            pass
-        # 非 aiocqhttp：放行
+            section.clear()
+            section.update(snapshot)
+            return False
         return True
+
+    async def _manage_push(
+        self,
+        event: AstrMessageEvent,
+        action: str,
+        game: str = "全部",
+        news_type: str = "全部",
+    ) -> str:
+        """命令和 AI 工具共用入口，目标只取真实事件，模型不能传入会话 ID。"""
+        if action not in ("开启", "关闭", "状态", "测试"):
+            return "操作仅支持：开启、关闭、状态、测试。"
+        if action != "状态" and not await self._is_group_admin(event):
+            return self._permission_hint(event)
+        umo = self._event_umo(event)
+        if not umo:
+            return "无法获取会话标识，未执行操作。"
+        target = self._push_target_label(event)
+        if action == "状态":
+            enabled = []
+            for gid, cfg_key in GAME_CONFIG_KEY.items():
+                for part, label in (("announce", "公告"), ("info", "资讯")):
+                    if umo in self.push_data.push_groups.get(f"{cfg_key}_{part}", []):
+                        enabled.append(GAME_MAP[gid] + label)
+                if umo in self.push_data.activity_push_groups.get(cfg_key, []):
+                    enabled.append(GAME_MAP[gid] + "活动预警")
+            return (
+                f"米游社推送状态 · {target}\n"
+                + ("已开启：" + "、".join(enabled) if enabled else "尚未开启任何订阅。")
+                + f"\n检查间隔：{max(60, int(self.cfg.get('push_interval', 300)))} 秒。"
+                "定时只推送时间窗口内的新内容，没有新内容时不发消息。"
+                "\n可发送 #米游社推送测试 检查主动发送链路。"
+            )
+        if action == "测试":
+            await self._prime_proactive_scenes(umo)
+            ok, permanent, exc = await self._send_chain(
+                umo,
+                self._finalize_proactive_chain(
+                    MessageChain(
+                        chain=[
+                            Plain(
+                                f"✅ 米游社主动推送测试 · {target}。测试不改变订阅和去重记录。"
+                            )
+                        ]
+                    )
+                ),
+            )
+            if ok:
+                return f"主动发送调用已完成，目标：{target}；请确认是否收到。此测试不改变订阅。"
+            logger.warning(f"[推送测试] 发送失败 permanent={permanent}: {exc}")
+            return (
+                "主动发送测试失败，不能确认可推送；请查看 AstrBot 日志检查平台主动消息权限/配额。"
+                "QQ 官方的主动消息限制无法由插件绕过。"
+            )
+        if game == "全部":
+            gids = list(GAME_MAP)
+        elif game in GAME_ALIAS:
+            gids = [GAME_ALIAS[game]]
+        elif game in GAME_MAP.values():
+            gids = [gid for gid, name in GAME_MAP.items() if name == game]
+        else:
+            return "无法识别游戏，请指定原神、崩铁、绝区零、崩坏三、崩坏二、未定事件簿或全部。"
+        parts = {
+            "公告": ["announce"],
+            "资讯": ["info"],
+            "全部": ["announce", "info"],
+        }.get(news_type)
+        if parts is None:
+            return "推送类型仅支持：公告、资讯、全部。"
+        keys = [f"{GAME_CONFIG_KEY[gid]}_{part}" for gid in gids for part in parts]
+        if not self._save_subscription(
+            self.push_data.push_groups, keys, umo, action == "开启"
+        ):
+            return "保存推送订阅失败，未生效；请检查数据目录写入权限和磁盘空间后重试。"
+        label = "全部游戏" if game == "全部" else GAME_MAP[gids[0]]
+        types_label = "公告及资讯" if news_type == "全部" else news_type
+        return f"✅ {label}{types_label}推送已{action}，目标：{target}。" + (
+            "\n订阅已保存；无新内容时不会立即推送。可发送 #米游社推送测试 验证发送。"
+            if action == "开启"
+            else ""
+        )
+
+    @llm_tool(name="miyoushe_push")
+    async def miyoushe_push_tool(
+        self,
+        event: AstrMessageEvent,
+        action: str,
+        game: str = "全部",
+        news_type: str = "全部",
+    ) -> str:
+        """管理米游社官方公告/资讯推送。用户要求开启、关闭、查看或测试推送时调用。
+        可直接在群里操作，无需私信、登录或 Cookie。目标绑定当前真实群聊/私聊，
+        私聊设置不会关联任何群。未指定游戏和类型时选择全部游戏的公告及资讯。
+        必须如实告知工具结果；订阅已保存不代表群消息已经送达。
+
+        Args:
+            action(string): 开启、关闭、状态或测试。
+            game(string): 游戏名或全部，如原神、崩铁、绝区零；默认全部。
+            news_type(string): 公告、资讯或全部；默认全部。
+        """
+        return await self._manage_push(event, action, game, news_type)
+
+    @regex(r"^[#/]?(?:(开启|关闭)米游社推送|米游社推送(状态|测试))$")
+    async def manage_push_command(self, event: AstrMessageEvent):
+        match = re.fullmatch(
+            r"[#/]?(?:(开启|关闭)米游社推送|米游社推送(状态|测试))",
+            event.message_str.strip(),
+        )
+        if match:
+            yield event.plain_result(
+                await self._manage_push(event, match.group(1) or match.group(2))
+            )
 
     @regex(
         rf"^#?(?:({GAME_REGEX})(开启|关闭)(公告|资讯)推送|(开启|关闭)({GAME_REGEX})(公告|资讯)推送)$"
     )
     async def toggle_push(self, event: AstrMessageEvent):
-        if not await self._is_group_admin(event):
-            yield event.plain_result("暂无权限，只有群管理员才能操作。")
-            return
         gid = Main._require_game(event)
         if gid is None:
             return
         game_name = GAME_MAP[gid]
-        cfg_key = GAME_CONFIG_KEY[gid]
         msg = event.message_str
 
         if "资讯" in msg:
-            type_part, type_name = "info", "资讯"
+            type_name = "资讯"
         else:
-            type_part, type_name = "announce", "公告"
-
-        config_key = f"{cfg_key}_{type_part}"
-        session_id = self._event_umo(event)
-        if not session_id:
-            yield event.plain_result("无法获取会话标识，推送订阅未保存。")
-            return
-        groups: list = self.push_data.push_groups.setdefault(config_key, [])
-
-        if "开启" in msg:
-            if session_id not in groups:
-                groups.append(session_id)
-                yield event.plain_result(
-                    f"✅ {game_name}{type_name}推送已开启！"
-                    f"最新{type_name}将自动推送至此。"
-                )
-            else:
-                yield event.plain_result(f"{game_name}{type_name}推送已处于开启状态。")
-        else:
-            if session_id in groups:
-                groups.remove(session_id)
-                yield event.plain_result(f"✅ {game_name}{type_name}推送已关闭。")
-            else:
-                yield event.plain_result(f"{game_name}{type_name}推送已处于关闭状态。")
-
-        self.push_data.save()
+            type_name = "公告"
+        yield event.plain_result(
+            await self._manage_push(
+                event,
+                "开启" if "开启" in msg else "关闭",
+                game_name,
+                type_name,
+            )
+        )
 
     @regex(
         rf"^#?(?:({GAME_REGEX})(开启|关闭)活动(?:到期)?预警(?:推送)?|(开启|关闭)({GAME_REGEX})活动(?:到期)?预警(?:推送)?)$"
     )
     async def toggle_activity_push(self, event: AstrMessageEvent):
         if not await self._is_group_admin(event):
-            yield event.plain_result("暂无权限，只有群管理员才能操作。")
+            yield event.plain_result(self._permission_hint(event))
             return
         gid = Main._require_game(event)
         if gid is None:
@@ -1143,38 +1286,91 @@ class Main(Star):
         msg = event.message_str
         cfg_key = GAME_CONFIG_KEY[gid]
         game_name = GAME_MAP[gid]
+        if cfg_key not in _ACTIVITY_GAMES:
+            yield event.plain_result(
+                "活动到期预警目前仅支持原神、崩铁；该游戏未开启预警。"
+            )
+            return
         session_id = self._event_umo(event)
         if not session_id:
             yield event.plain_result("无法获取会话标识，推送订阅未保存。")
             return
-        groups: list = self.push_data.activity_push_groups.setdefault(cfg_key, [])
+        enable = "开启" in msg
+        if not self._save_subscription(
+            self.push_data.activity_push_groups, [cfg_key], session_id, enable
+        ):
+            yield event.plain_result(
+                "保存推送订阅失败，未生效；请检查数据目录写入权限和磁盘空间。"
+            )
+            return
+        yield event.plain_result(
+            f"✅ {game_name}活动到期预警已{'开启' if enable else '关闭'}，目标：{self._push_target_label(event)}。"
+        )
 
-        if "开启" in msg:
-            if session_id not in groups:
-                groups.append(session_id)
-                yield event.plain_result(f"✅ {game_name}活动到期预警已开启！")
-            else:
-                yield event.plain_result(f"{game_name}活动到期预警已处于开启状态。")
-        else:
-            if session_id in groups:
-                groups.remove(session_id)
-                yield event.plain_result(f"✅ {game_name}活动到期预警已关闭。")
-            else:
-                yield event.plain_result(f"{game_name}活动到期预警已处于关闭状态。")
-
-        self.push_data.save()
-
-    @regex(rf"^#?({GAME_REGEX})推送(公告|资讯)$")
+    @regex(rf"^#?(?:推送({GAME_REGEX})(公告|资讯)|({GAME_REGEX})推送(公告|资讯))$")
     @permission_type(PermissionType.ADMIN)
     async def manual_push(self, event: AstrMessageEvent):
         gid = Main._require_game(event)
         if gid is None:
             return
-        yield event.plain_result("正在执行推送检查...")
-        await self._do_push_round()
-        yield event.plain_result("推送检查完成。")
+        # 与帮助里的含义一致：只向当前会话发送指定游戏/类型最新一条，
+        # 不受定时窗口/去重限制，不向所有订阅群广播，也不改定时去重状态。
+        umo = self._event_umo(event)
+        if not umo:
+            yield event.plain_result("无法获取会话标识，未执行推送。")
+            return
+        news_type = self._parse_type(event.message_str)
+        yield event.plain_result("正在获取最新一条内容并推送到当前会话...")
+        news = await self.mhy_client.get_news_list(
+            gids=gid, news_type=news_type, page_size=1
+        )
+        if not news:
+            yield event.plain_result(
+                "未获取到公告/资讯，未发送；请查看米游社 API 日志。"
+            )
+            return
+        post = news[0].get("post") or {}
+        post_id = str(post.get("post_id") or "")
+        if not post_id:
+            yield event.plain_result("返回内容缺少文章 ID，未发送。")
+            return
+        label = (
+            f"【{GAME_MAP[gid]}{TYPE_MAP[news_type]}推送】\n{post.get('subject', '')}"
+        )
+        link = f"https://www.miyoushe.com/{GAME_URL_KEY[gid]}/article/{post_id}"
+        created = self._extract_created_ts(post, news[0])
+        try:
+            text, chain = await self._build_rich_chain(
+                post_id,
+                label,
+                link,
+                max(0, int(self.cfg.get("push_summary_len", 100))),
+                created,
+            )
+        except Exception as e:
+            logger.warning(f"[手动推送] 卡片构造失败，退回文字: {e}")
+            text = self._format_push_text(label, "", created, link)
+            chain = MessageChain(chain=[Plain(text)])
+        outcome = await self._send_entries_merged(
+            umo,
+            [
+                {
+                    "post_id": post_id,
+                    "gid": gid,
+                    "label": label,
+                    "link": link,
+                    "text": text,
+                    "chain": chain,
+                }
+            ],
+        )
+        yield event.plain_result(
+            "最新内容发送调用已完成，请确认当前会话是否收到。"
+            if outcome[0]
+            else "推送发送失败，请检查 AstrBot 日志中的平台权限/配额错误。"
+        )
 
-    @command("米游社推送")
+    @regex(r"^[#/]?米游社推送$")
     async def help_cmd(self, event: AstrMessageEvent):
         yield event.plain_result(
             "/米游社推送 - 帮助\n"
@@ -1187,12 +1383,16 @@ class Main(Star):
             "· #米游社 关键词 3（单条纯文字，不调 AI）\n"
             "· 发送文章链接 → AI 总结\n\n"
             "推送设置 (群管理员):\n"
+            "· #开启/关闭米游社推送（全部游戏公告及资讯）\n"
             "· #开启/关闭原神公告推送\n"
             "· #开启/关闭崩铁资讯推送\n"
             "· #开启/关闭原神活动预警\n\n"
+            "· #米游社推送状态 · #米游社推送测试\n"
+            "可直接在群内设置，无需私信；私聊开启只推送到私聊。\n"
+            "QQ 官方群请由 AstrBot 管理员操作。\n\n"
             "手动推送 (Bot管理员):\n"
             "· #推送原神公告\n"
-            "· #推送崩铁资讯\n\n"
+            "· #推送崩铁资讯（最新一条发到当前会话，不限发布时间）\n\n"
             "定时每5分钟检查一次，推送为「文字+封面」富文本卡片；\n"
             "链接解析/公告详情使用 AI 总结（已移除图片渲染，需配置视觉模型）；\n"
             "#米游社 搜索为纯文字列表，不调 AI。"
@@ -1241,6 +1441,21 @@ class Main(Star):
         umo = getattr(event, "unified_msg_origin", "") or ""
         if not umo:
             logger.error("event 缺少 unified_msg_origin，无法保存推送订阅")
+            return ""
+        parsed = Main._parse_push_session(umo)
+        if not parsed or not all(parsed):
+            logger.error("event 的 unified_msg_origin 不合法，无法保存推送订阅")
+            return ""
+        # QQ 开启群内独立会话时会话 ID 可能含用户前缀；推送应绑定群，
+        # 而不是订阅者的对话上下文。其他平台保留 UMO（例如 Telegram 话题）。
+        platform = event.get_platform_name()
+        group_id = event.get_group_id()
+        if (
+            group_id
+            and not event.is_private_chat()
+            and (platform == "aiocqhttp" or platform.startswith("qq_official"))
+        ):
+            return f"{parsed[0]}:{_GROUP_MESSAGE_TYPE}:{group_id}"
         return umo
 
     @staticmethod
