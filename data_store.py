@@ -7,6 +7,7 @@
 import json
 import os
 import re
+import tempfile
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from astrbot.api import logger
@@ -348,11 +349,26 @@ class PushDataStore:
     # ==================== IO ====================
 
     def save(self) -> None:
+        temp_path = None
         try:
-            with open(self._file, "w", encoding="utf-8") as f:
+            # 同目录原子替换，写入/序列化失败不能截断已有订阅文件。
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=self._data_dir,
+                prefix="push_data_",
+                suffix=".tmp",
+                delete=False,
+            ) as f:
+                temp_path = f.name
                 json.dump(self._data, f, ensure_ascii=False, indent=2)
+            os.replace(temp_path, self._file)
         except Exception as e:
             logger.error(f"保存推送数据失败: {e}")
+            raise
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                os.unlink(temp_path)
 
     def _load(self) -> dict:
         defaults = {
